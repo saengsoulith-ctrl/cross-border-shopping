@@ -1,20 +1,103 @@
-import {NextResponse} from "next/server";
-import {createClient} from "@supabase/supabase-js";
-import {z} from "zod";
-export const runtime="nodejs";
-const customerSchema=z.object({name:z.string().min(1).max(160),phone:z.string().min(5).max(40),contact:z.string().max(160).optional().default(""),address:z.string().min(5).max(1000)});
-const itemSchema=z.object({origin:z.enum(["CN","TH","VN"]),category:z.enum(["general","clothes","liquid","other"]),url:z.string().url(),name:z.string().min(1).max(300),observedPrice:z.string().min(1),currency:z.enum(["CNY","THB","VND"]),quantity:z.string().min(1),color:z.string().optional(),size:z.string().optional(),volume:z.string().optional(),unit:z.string().optional(),spec:z.string().optional()});
-export async function POST(req:Request){try{
- const u=process.env.NEXT_PUBLIC_SUPABASE_URL,k=process.env.SUPABASE_SERVICE_ROLE_KEY;if(!u||!k)return NextResponse.json({error:"ยังไม่ได้ตั้งค่า Supabase"},{status:503});
- const f=await req.formData(),customer=customerSchema.parse(JSON.parse(String(f.get("customer")||"{}"))),items=z.array(itemSchema).min(1).max(30).parse(JSON.parse(String(f.get("products")||"[]"))),currency=z.enum(["LAK","THB"]).parse(String(f.get("paymentCurrency"))),carrier=String(f.get("carrierCode"));
- const imgs=items.map((_,i)=>f.get("screenshot_"+i));if(imgs.some(x=>!(x instanceof File)||x.size===0))return NextResponse.json({error:"ต้องแนบภาพทุกสินค้า"},{status:400});
- for(const x of imgs as File[])if(!["image/jpeg","image/png","image/webp"].includes(x.type)||x.size>8*1024*1024)return NextResponse.json({error:"ภาพต้องเป็น JPG/PNG/WEBP และไม่เกิน 8 MB"},{status:400});
- const db=createClient(u,k,{auth:{persistSession:false}}),orderNumber="CBS-"+new Date().toISOString().slice(0,10).replaceAll("-","")+"-"+crypto.randomUUID().slice(0,6).toUpperCase();
- const {data:o,error:e}=await db.from("orders").insert({order_number:orderNumber,customer_name:customer.name,customer_phone:customer.phone,customer_contact:customer.contact,destination_address:customer.address,payment_currency:currency,carrier_code:carrier,status:"received"}).select("id").single();if(e)throw e;
- for(let i=0;i<items.length;i++){const p=items[i],img=imgs[i] as File,ext=img.type==="image/png"?"png":img.type==="image/webp"?"webp":"jpg",path=`${o.id}/${i+1}-${crypto.randomUUID()}.${ext}`;
-  const {error:up}=await db.storage.from("product-evidence").upload(path,img,{contentType:img.type});if(up)throw up;
-  const {error:ie}=await db.from("order_items").insert({order_id:o.id,origin_country:p.origin,category:p.category,product_url:p.url,product_name:p.name,customer_observed_price:Number(p.observedPrice),source_currency:p.currency,quantity:Number(p.quantity),color:p.color||null,size:p.size||null,volume:p.volume?Number(p.volume):null,volume_unit:p.unit||null,specification:p.spec||null,screenshot_path:path,verification_status:"pending"});if(ie)throw ie;
- }
- await db.from("order_status_history").insert({order_id:o.id,status:"received",note:"Customer submitted order"});
- return NextResponse.json({orderNumber},{status:201});
- }catch(e){return NextResponse.json({error:e instanceof Error?e.message:"ข้อมูลไม่ถูกต้อง"},{status:400})}}
+"use client";
+import { useState } from "react";
+
+export default function AdminPage() {
+  const [pw, setPw] = useState("");
+  const [authed, setAuthed] = useState(false);
+  const [orders, setOrders] = useState<any[]>([]);
+  const [prices, setPrices] = useState<Record<string, string>>({});
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(false);
+
+  async function loadOrders(password = pw) {
+    setLoading(true);
+    const r = await fetch("/api/admin/orders", { headers: { "x-admin-password": password } });
+    const d = await r.json();
+    setLoading(false);
+    if (!r.ok) { alert(d.error || "รหัสผ่านไม่ถูกต้อง"); return; }
+    setAuthed(true);
+    setOrders(d.orders || []);
+  }
+
+  async function sendQuote(orderId: string) {
+    const total = prices[orderId];
+    if (!total) { alert("กรุณากรอกยอดเงินรวมสุทธิก่อนส่ง"); return; }
+    setLoading(true);
+    const r = await fetch("/api/admin/orders", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-admin-password": pw },
+      body: JSON.stringify({ orderId, finalTotal: total, note: notes[orderId] || "" }),
+    });
+    const d = await r.json();
+    setLoading(false);
+    if (!r.ok) { alert(d.error); return; }
+    alert("✅ ส่งใบเสนอราคาพร้อมปุ่มตกลงสั่งซื้อเข้า Messenger ลูกค้าเรียบร้อยแล้ว!");
+    loadOrders();
+  }
+
+  if (!authed) {
+    return (
+      <main style={{ maxWidth: "400px", marginTop: "60px" }}>
+        <div className="panel">
+          <h2>🔐 เข้าสู่ระบบแอดมิน</h2>
+          <div className="field">
+            <label>รหัสผ่านแอดมิน (ADMIN_PASSWORD)</label>
+            <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="กรอกรหัสผ่าน" />
+          </div>
+          <button onClick={() => loadOrders()} disabled={loading}>{loading ? "กำลังตรวจสอบ..." : "เข้าสู่ระบบ"}</button>
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <main>
+      <header className="hero" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div><h1>ระบบจัดการออเดอร์ (Admin)</h1><p>ตรวจสอบราคาและส่งใบเสนอราคาเข้าแชต Messenger</p></div>
+        <button className="secondary" onClick={() => loadOrders()}>🔄 รีเฟรช</button>
+      </header>
+
+      {orders.map((o) => (
+        <div className="panel" key={o.id}>
+          <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: "8px", borderBottom: "1px solid #eee", paddingBottom: "10px", marginBottom: "12px" }}>
+            <div>
+              <strong style={{ fontSize: "18px", color: "#102a43" }}>{o.order_number}</strong>
+              <div className="muted">ลูกค้า: {o.customer_name} ({o.customer_phone}) · ที่อยู่: {o.destination_address}</div>
+              <div style={{ fontSize: "13px", color: o.customer_contact?.includes("PSID:") ? "#15803d" : "#c2410c", fontWeight: "bold", marginTop: "4px" }}>
+                {o.customer_contact?.includes("PSID:") ? "✅ เชื่อมต่อแชต Messenger แล้ว" : "⚠️ ลูกค้ายังไม่กดเชื่อมแชต Messenger"}
+              </div>
+            </div>
+            <div><span style={{ background: "#e2e8f0", padding: "4px 10px", borderRadius: "999px", fontSize: "13px", fontWeight: "bold" }}>สถานะ: {o.status}</span></div>
+          </div>
+
+          {o.order_items?.map((item: any, idx: number) => (
+            <div key={item.id} style={{ background: "#f8fafc", padding: "10px", borderRadius: "8px", marginBottom: "8px", display: "flex", gap: "12px", alignItems: "center" }}>
+              {item.signedUrl && <a href={item.signedUrl} target="_blank" rel="noreferrer"><img src={item.signedUrl} alt="item" style={{ width: "70px", height: "70px", objectFit: "cover", borderRadius: "6px" }} /></a>}
+              <div style={{ fontSize: "14px" }}>
+                <strong>{idx + 1}. {item.product_name}</strong> ({item.origin_country})<br />
+                ราคาที่ลูกค้ากรอก: {item.customer_observed_price} {item.source_currency} × {item.quantity} ชิ้น<br />
+                <a href={item.product_url} target="_blank" rel="noreferrer" style={{ color: "#0084ff" }}>🔗 เปิดลิงก์สินค้า</a>
+              </div>
+            </div>
+          ))}
+
+          <div style={{ background: "#fffbeb", border: "1px solid #fde68a", padding: "12px", borderRadius: "10px", marginTop: "12px" }}>
+            <div className="grid">
+              <div className="field">
+                <label>ยอดรวมสุทธิที่ตรวจสอบแล้ว ({o.payment_currency}) *</label>
+                <input type="number" placeholder={`เช่น ${o.payment_currency === "LAK" ? "450000" : "850"}`} value={prices[o.id] ?? o.final_total ?? ""} onChange={(e) => setPrices({ ...prices, [o.id]: e.target.value })} />
+              </div>
+              <div className="field">
+                <label>หมายเหตุ / รายละเอียดค่าส่ง (ส่งให้ลูกค้าเห็น)</label>
+                <input placeholder="เช่น ค่าสินค้า + ค่าส่งจีน-ลาว รวมทั้งหมด" value={notes[o.id] || ""} onChange={(e) => setNotes({ ...notes, [o.id]: e.target.value })} />
+              </div>
+            </div>
+            <button onClick={() => sendQuote(o.id)} disabled={loading} style={{ background: "#0084ff" }}>
+              📨 บันทึกยอดและส่งปุ่ม "ตกลงสั่งซื้อ" เข้า Messenger
+            </button>
+          </div>
+        </div>
+      ))}
+    </main>
+  );
+}
