@@ -16,6 +16,7 @@ const fresh = (): Product => ({
 
 const curr: Record<string, string> = { CN: "CNY", TH: "THB", VN: "VND" };
 const PAGE_ID = "18062086765455";
+const CARRIER_LIST = ["1", "2", "3", "4"];
 
 export default function Home() {
   const [ps, setPs] = useState<Product[]>([fresh()]);
@@ -26,8 +27,8 @@ export default function Home() {
   const [errMsg, setErrMsg] = useState("");
   const [done, setDone] = useState<{ orderNumber: string; name: string; count: number; currency: string } | null>(null);
 
-  const upd = (i: number, k: keyof Product, v: any) =>
-    setPs((a) => a.map((p, n) => (n === i ? { ...p, [k]: v, ...(k === "origin" ? { currency: curr[v] } : {}) } : p)));
+  const upd = (i: number, k: keyof Product, v: unknown) =>
+    setPs((a) => a.map((p, n) => (n === i ? { ...p, [k]: v, ...(k === "origin" ? { currency: curr[String(v)] } : {}) } : p)));
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -44,7 +45,9 @@ export default function Home() {
       fd.append("paymentCurrency", pay);
       fd.append("carrierCode", carrier);
       fd.append("products", JSON.stringify(ps.map(({ screenshot, ...p }) => p)));
-      ps.forEach((p, i) => fd.append("screenshot_" + i, p.screenshot!));
+      ps.forEach((p, i) => {
+        if (p.screenshot) fd.append("screenshot_" + i, p.screenshot);
+      });
 
       const r = await fetch("/api/orders", { method: "POST", body: fd });
       const d = await r.json();
@@ -127,7 +130,7 @@ export default function Home() {
                   {p.category === "other" && <div className="field"><label>รายละเอียด/สเปก</label><textarea value={p.spec} onChange={(e) => upd(i, "spec", e.target.value)} /></div>}
                   <div className="field">
                     <label>ภาพหน้าจอสินค้า <span className="required">* บังคับแนบทุกชิ้น</span></label>
-                    <input required type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => upd(i, "screenshot", e.target.files?.[0] || null)} />
+                    <input required type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => upd(i, "screenshot", e.target.files ? e.target.files.item(0) : null)} />
                     <small>JPG, PNG หรือ WEBP ไม่เกิน 8 MB</small>
                   </div>
                   {ps.length > 1 && <button type="button" className="secondary" onClick={() => setPs((a) => a.filter((_, n) => n !== i))}>ลบรายการ</button>}
@@ -139,7 +142,7 @@ export default function Home() {
               <h2>2. การจัดส่งและชำระเงิน</h2>
               <div className="grid">
                 <div className="field"><label>สกุลเงินชำระ</label><select value={pay} onChange={(e) => setPay(e.target.value)}><option value="LAK">กีบลาว (LAK)</option><option value="THB">บาทไทย (THB)</option></select></div>
-                <div className="field"><label>บริษัทขนส่ง</label><select value={carrier} onChange={(e) => setCarrier(e.target.value)}>{[1, 2, 3, 4].map((n) => <option key={n} value={"carrier_" + n}>บริษัทขนส่ง {n}</option>)}</select></div>
+                <div className="field"><label>บริษัทขนส่ง</label><select value={carrier} onChange={(e) => setCarrier(e.target.value)}>{CARRIER_LIST.map((n) => <option key={n} value={"carrier_" + n}>บริษัทขนส่ง {n}</option>)}</select></div>
               </div>
             </section>
             <section className="panel">
@@ -149,5 +152,3 @@ export default function Home() {
                 <div className="field"><label>เบอร์โทรศัพท์ *</label><input required value={cust.phone} onChange={(e) => setCust({ ...cust, phone: e.target.value })} /></div>
                 <div className="field"><label>ช่องทางติดต่อเพิ่มเติม</label><input value={cust.contact} onChange={(e) => setCust({ ...cust, contact: e.target.value })} /></div>
               </div>
-              <div className="field"><label>ที่อยู่จัดส่งในลาว *</label><textarea required value={cust.address} onChange={(e) => setCust({ ...cust, address: e.target.value })} /></div>
-            </section>
